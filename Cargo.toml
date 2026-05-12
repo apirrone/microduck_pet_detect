@@ -1,0 +1,27 @@
+[package]
+name = "microduck_pet_detect"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "microduck_pet_detect"
+path = "src/lib.rs"
+
+[[bin]]
+name = "pet_detect"
+path = "src/bin/detect.rs"
+
+[[bin]]
+name = "pet_features"
+path = "src/bin/features.rs"
+
+[dependencies]
+anyhow = "1.0"
+clap = { version = "4.5", features = ["derive"] }
+hound = "3.5"
+rustfft = "6.2"
+ort = { version = "=2.0.0-rc.11", features = ["load-dynamic"], default-features = false }
+
+[profile.release]
+lto = true
+codegen-units = 1

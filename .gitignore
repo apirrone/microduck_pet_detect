@@ -1,0 +1,7 @@
+/target
+/data/normal/*.wav
+/data/petting/*.wav
+/models/*.onnx
+__pycache__/
+*.pyc
+.venv/
