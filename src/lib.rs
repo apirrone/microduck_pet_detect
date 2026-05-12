@@ -1,6 +1,10 @@
 use std::f32::consts::PI;
+use std::path::Path;
 use std::sync::Arc;
 
+use anyhow::Result;
+use ort::session::{builder::GraphOptimizationLevel, Session};
+use ort::value::Tensor;
 use rustfft::{num_complex::Complex32, Fft, FftPlanner};
 
 pub const SAMPLE_RATE: usize = 16_000;
@@ -179,4 +183,115 @@ fn resample_linear(input: &[f32], sr_in: usize, sr_out: usize) -> Vec<f32> {
         out.push(s0 * (1.0 - frac) + s1 * frac);
     }
     out
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PettingEvent {
+    Start,
+    End,
+}
+
+/// Streaming petting detector. Push 16 kHz mono f32 samples; receive Start/End
+/// events on transitions.
+///
+/// Hysteresis: enters "petting" state when probability rises above
+/// `enter_threshold`, leaves it when probability falls below `exit_threshold`.
+/// Set `exit_threshold` somewhat lower than `enter_threshold` to avoid flapping
+/// at the boundary.
+pub struct PettingDetector {
+    session: Session,
+    extractor: MelExtractor,
+    ring: Vec<f32>,
+    samples_until_infer: usize,
+    stride: usize,
+    is_petting: bool,
+    enter_threshold: f32,
+    exit_threshold: f32,
+}
+
+pub struct PettingDetectorConfig {
+    /// Inference cadence in samples between successive windows. Smaller = lower
+    /// latency, more CPU. Default: 4000 samples ≈ 250 ms.
+    pub stride: usize,
+    /// Probability above which we declare petting started.
+    pub enter_threshold: f32,
+    /// Probability below which we declare petting ended.
+    pub exit_threshold: f32,
+}
+
+impl Default for PettingDetectorConfig {
+    fn default() -> Self {
+        Self {
+            stride: WINDOW_SAMPLES / 4,
+            enter_threshold: 0.98,
+            exit_threshold: 0.5,
+        }
+    }
+}
+
+impl PettingDetector {
+    pub fn new(model_path: &Path, config: PettingDetectorConfig) -> Result<Self> {
+        let session = Session::builder()?
+            .with_optimization_level(GraphOptimizationLevel::Level3)?
+            .commit_from_file(model_path)?;
+        Ok(Self {
+            session,
+            extractor: MelExtractor::new(),
+            ring: Vec::with_capacity(WINDOW_SAMPLES * 2),
+            samples_until_infer: WINDOW_SAMPLES,
+            stride: config.stride,
+            is_petting: false,
+            enter_threshold: config.enter_threshold,
+            exit_threshold: config.exit_threshold,
+        })
+    }
+
+    /// Push samples and return any state-change events triggered by this batch.
+    /// Also returns the latest inference probability (if any inference ran), for
+    /// logging/diagnostics.
+    pub fn push_samples(&mut self, samples: &[f32]) -> (Vec<PettingEvent>, Option<f32>) {
+        self.ring.extend_from_slice(samples);
+        let mut events = Vec::new();
+        let mut last_p = None;
+
+        while self.ring.len() >= self.samples_until_infer {
+            let start = self.samples_until_infer - WINDOW_SAMPLES;
+            let mel = self
+                .extractor
+                .log_mel(&self.ring[start..start + WINDOW_SAMPLES]);
+            let input = Tensor::from_array(([1usize, 1, N_MELS, WINDOW_FRAMES], mel)).unwrap();
+            let outputs = self.session.run(ort::inputs![input]).unwrap();
+            let (_shape, probs) = outputs[0].try_extract_tensor::<f32>().unwrap();
+            let p = probs[1];
+            last_p = Some(p);
+
+            if !self.is_petting && p >= self.enter_threshold {
+                self.is_petting = true;
+                events.push(PettingEvent::Start);
+            } else if self.is_petting && p < self.exit_threshold {
+                self.is_petting = false;
+                events.push(PettingEvent::End);
+            }
+
+            self.samples_until_infer += self.stride;
+        }
+
+        // Cap ring at 2× window so memory is bounded.
+        if self.ring.len() > WINDOW_SAMPLES * 4 {
+            let drop = self.ring.len() - WINDOW_SAMPLES * 2;
+            self.ring.drain(..drop);
+            self.samples_until_infer -= drop;
+        }
+        (events, last_p)
+    }
+
+    pub fn is_petting(&self) -> bool {
+        self.is_petting
+    }
+}
+
+/// Helper to convert a slice of i16 LE samples (as produced by `arecord -f S16_LE`)
+/// to f32 in [-1, 1].
+pub fn i16_to_f32(input: &[i16]) -> Vec<f32> {
+    input.iter().map(|&s| s as f32 / 32768.0).collect()
 }

@@ -5,6 +5,7 @@
 #   "torch>=2.2",
 #   "numpy",
 #   "onnx",
+#   "onnxscript",
 # ]
 # ///
 """Train the petting classifier.
@@ -23,6 +24,7 @@ import subprocess
 from pathlib import Path
 
 import numpy as np
+import onnx
 import torch
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
@@ -152,6 +154,15 @@ def main() -> None:
         dynamic_axes={"input": {0: "batch"}, "probs": {0: "batch"}},
         opset_version=17,
     )
+
+    # The new dynamo exporter writes weights to a sidecar `.onnx.data` file by
+    # default. Consolidate everything back into a single .onnx so the runtime
+    # only needs one artifact.
+    sidecar = MODEL_OUT.with_suffix(".onnx.data")
+    if sidecar.exists():
+        m = onnx.load(str(MODEL_OUT), load_external_data=True)
+        onnx.save_model(m, str(MODEL_OUT), save_as_external_data=False)
+        sidecar.unlink()
     print(f"wrote {MODEL_OUT}")
 
 
