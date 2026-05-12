@@ -105,13 +105,19 @@ jobs:
             - **libonnxruntime.so**: ONNX Runtime library.
             - **pet_detect.onnx**: trained model (only if committed to the repo at tag time).
 
-            ### Usage on the Pi
+            ### Installation
 
             ```bash
-            # Unpack alongside microduck_runtime (which already has libonnxruntime in /usr/local/lib)
-            tar xzf microduck_pet_detect-aarch64-linux.tar.gz
-            arecord -D hw:aic3104,0 -f S16_LE -r 16000 -c 1 -t raw \
-              | ./pet_detect --model pet_detect.onnx
+            curl -sSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh | bash
+            ```
+
+            Installs `pet_detect` + `pet_features` to `/usr/local/bin` and the ONNX model to `/opt/microduck/pet_detect.onnx`.
+
+            ### Quick test
+
+            ```bash
+            arecord -D plughw:aic3104,0 -f S16_LE -r 16000 -c 1 -t raw \
+              | pet_detect --model /opt/microduck/pet_detect.onnx
             ```
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
