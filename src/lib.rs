@@ -223,8 +223,11 @@ impl Default for PettingDetectorConfig {
     fn default() -> Self {
         Self {
             stride: WINDOW_SAMPLES / 4,
-            enter_threshold: 0.98,
-            exit_threshold: 0.5,
+            enter_threshold: 0.95,
+            // Higher than you'd naively pick: even ambient mic noise tends to
+            // hover around p≈0.7 with a small training set, so dropping below
+            // 0.85 cleanly indicates the petting actually stopped.
+            exit_threshold: 0.85,
         }
     }
 }

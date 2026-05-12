@@ -20,10 +20,10 @@ struct Args {
     #[arg(long, default_value_t = WINDOW_SAMPLES / 4)]
     stride: usize,
     /// Probability above which petting is declared started.
-    #[arg(long, default_value_t = 0.98)]
+    #[arg(long, default_value_t = 0.95)]
     threshold: f32,
     /// Probability below which petting is declared ended (hysteresis).
-    #[arg(long, default_value_t = 0.5)]
+    #[arg(long, default_value_t = 0.85)]
     exit_threshold: f32,
 }
 
