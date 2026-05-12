@@ -1,0 +1,117 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build for Raspberry Pi
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-gnu
+
+      - name: Install cross
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cross@0.2.5
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Set crate version from tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "Setting Cargo.toml version to $VERSION"
+          sed -i -E "0,/^version = \".*\"/s//version = \"$VERSION\"/" Cargo.toml
+          grep '^version' Cargo.toml
+
+      - name: Build for Raspberry Pi Zero 2W (ARM64)
+        env:
+          CARGO_HOME: ~/.cargo
+          RUST_BACKTRACE: 1
+          PKG_CONFIG_ALLOW_CROSS: 1
+        run: cross build --release --target aarch64-unknown-linux-gnu --verbose
+
+      - name: Download ONNX Runtime for ARM64
+        run: |
+          for i in 1 2 3; do
+            echo "Attempt $i: Downloading ONNX Runtime..."
+            if curl -L --fail --retry 3 --retry-delay 5 \
+              https://github.com/microsoft/onnxruntime/releases/download/v1.23.0/onnxruntime-linux-aarch64-1.23.0.tgz \
+              -o /tmp/ort.tgz; then
+              tar xzf /tmp/ort.tgz -C /tmp && break
+            else
+              [ $i -lt 3 ] && sleep 10
+            fi
+          done
+          ls -lh /tmp/onnxruntime-linux-aarch64-1.23.0/lib/libonnxruntime.so*
+
+      - name: Prepare release tarball
+        run: |
+          mkdir -p dist
+          cp target/aarch64-unknown-linux-gnu/release/pet_detect dist/
+          cp target/aarch64-unknown-linux-gnu/release/pet_features dist/
+          cp -a /tmp/onnxruntime-linux-aarch64-1.23.0/lib/libonnxruntime.so* dist/
+          # Bundle the latest committed model if one is checked in (it's gitignored by
+          # default, but a release may include one by force-adding it).
+          if [ -f models/pet_detect.onnx ]; then
+            cp models/pet_detect.onnx dist/
+          fi
+          cd dist
+          tar czf microduck_pet_detect-aarch64-linux.tar.gz *
+          cd ..
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            dist/microduck_pet_detect-aarch64-linux.tar.gz
+          body: |
+            ## Microduck Pet Detect ${{ github.ref_name }}
+
+            Cross-compiled binaries for Raspberry Pi Zero 2W (ARM64).
+
+            ### Contents
+
+            - **pet_detect**: live classifier — reads 16-bit LE mono PCM @ 16 kHz from stdin, prints `<ts_ms>\t<p_petting>\t<label>` per inference window.
+            - **pet_features**: dumps log-mel features of a WAV to stdout as raw f32 (used by training).
+            - **libonnxruntime.so**: ONNX Runtime library.
+            - **pet_detect.onnx**: trained model (only if committed to the repo at tag time).
+
+            ### Usage on the Pi
+
+            ```bash
+            # Unpack alongside microduck_runtime (which already has libonnxruntime in /usr/local/lib)
+            tar xzf microduck_pet_detect-aarch64-linux.tar.gz
+            arecord -D hw:aic3104,0 -f S16_LE -r 16000 -c 1 -t raw \
+              | ./pet_detect --model pet_detect.onnx
+            ```
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
