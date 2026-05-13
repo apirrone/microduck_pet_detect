@@ -234,8 +234,14 @@ impl Default for PettingDetectorConfig {
 
 impl PettingDetector {
     pub fn new(model_path: &Path, config: PettingDetectorConfig) -> Result<Self> {
+        // Pin ort to single-threaded execution. Default is one intra-op worker
+        // per core, which on a 4-core Pi Zero 2W spawns 3 extra threads each
+        // burning ~20% CPU on synchronization overhead for a 20 KB model.
+        // Single-threaded execution is much cheaper for tiny models.
         let session = Session::builder()?
             .with_optimization_level(GraphOptimizationLevel::Level3)?
+            .with_intra_threads(1)?
+            .with_inter_threads(1)?
             .commit_from_file(model_path)?;
         Ok(Self {
             session,
