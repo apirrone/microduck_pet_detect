@@ -152,7 +152,7 @@ def main() -> None:
         input_names=["input"],
         output_names=["probs"],
         dynamic_axes={"input": {0: "batch"}, "probs": {0: "batch"}},
-        opset_version=17,
+        opset_version=18,
     )
 
     # The new dynamo exporter writes weights to a sidecar `.onnx.data` file by
